@@ -14,6 +14,7 @@ export default function Result() {
   const [isMinting, setIsMinting] = useState(false);
   const [mintStatus, setMintStatus] = useState<'idle' | 'uploading' | 'minting' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
+  const [contractAddress, setContractAddress] = useState<string | null>(null);
   const router = useRouter();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -21,10 +22,12 @@ export default function Result() {
     // 從 localStorage 獲取用戶名稱和測驗結果
     const storedUserName = localStorage.getItem('userName');
     const storedResult = localStorage.getItem('quizResult');
+    const storedContract = localStorage.getItem('contractAddress');
     
     if (storedUserName && storedResult) {
       setUserName(storedUserName);
       setQuizResult(storedResult);
+      if (storedContract) setContractAddress(storedContract);
     } else {
       // 如果沒有數據，重定向到首頁
       router.push('/');
@@ -161,71 +164,90 @@ export default function Result() {
   };
 
   const handleMint = async () => {
+    if (!walletAddress.trim()) {
+      setErrorMessage('Please enter a wallet address');
+      return;
+    }
+
+    setIsMinting(true);
+    setMintStatus('minting');
+    setErrorMessage('');
+
     try {
-      if (!walletAddress.trim()) {
-        setErrorMessage('Please enter your wallet address');
-        return;
+      // 1. 先上傳圖片到 Cloudinary
+      const uploadRes = await fetch('/api/upload-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: generatedUrl }),
+      });
+      
+      const uploadJson = await uploadRes.json();
+      if (!uploadRes.ok || !uploadJson.success) {
+        throw new Error(uploadJson?.message || 'Image upload failed');
       }
-      setIsMinting(true);
-      setMintStatus('uploading');
-      setErrorMessage('');
+      
+      const imageUrl = uploadJson.imageUrl;
+      console.log('Image uploaded:', imageUrl);
 
-      // Prepare metadata (future-ready)
-      const today = new Date().toISOString().split('T')[0];
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      const metadata = {
-        name: `${userName}'s Soulpet: ${quizResult}`,
-        description: `Soulpet result for ${userName} on ${today}.`,
-        image: `${origin}/assets/animals/${quizResult}.png`,
-        attributes: [
-          { trait_type: 'Animal', value: quizResult },
-          { trait_type: 'Owner', value: userName },
-          { trait_type: 'Creation Date', value: today },
-        ],
+      // 2. 用圖片 URL 來 mint NFT
+      const claimBody: any = {
+        recipientAddress: walletAddress.trim(),
+        userName,
+        animalType: quizResult,
+        imageUrl
       };
+      if (contractAddress) claimBody.contractAddress = contractAddress;
+      
+      console.log('Claim body:', claimBody);
 
-      // Try calling placeholder API (safe to remove/replace later)
-      let metadataUri = metadata.image;
-      try {
-        const uploadRes = await fetch('/api/upload-metadata', {
+      let claimRes = await fetch('/api/drops/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(claimBody),
+      });
+      let claimJson = await claimRes.json();
+      console.log('Claim response:', claimJson);
+      if (!(claimRes.ok) && String(claimJson?.message || '').includes('Missing contractAddress')) {
+        // 自動部署合約後再嘗試一次
+        const deployRes = await fetch('/api/drops/deploy', { method: 'POST' });
+        const deployJson = await deployRes.json();
+        console.log('Auto deploy response:', deployJson);
+        if (!deployRes.ok || !deployJson?.data) {
+          throw new Error(deployJson?.message || 'Auto deploy failed');
+        }
+        const deployedAddr =
+          deployJson?.usedContractAddress ||
+          deployJson?.data?.contractAddress ||
+          deployJson?.data?.contract?.address ||
+          deployJson?.data?.address ||
+          null;
+        if (!deployedAddr) throw new Error('Cannot read contractAddress from deploy response');
+        setContractAddress(deployedAddr);
+        try { localStorage.setItem('contractAddress', deployedAddr); } catch {}
+
+        // retry claim with address
+        claimBody.contractAddress = deployedAddr;
+        claimRes = await fetch('/api/drops/claim', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(metadata),
+          body: JSON.stringify(claimBody),
         });
-        const uploadJson = await uploadRes.json();
-        if (uploadRes.ok && uploadJson?.data?.uri) {
-          metadataUri = uploadJson.data.uri;
-        }
-      } catch (e) {
-        // ignore, keep local image as placeholder
-        console.log('upload-metadata skipped/error:', e);
+        claimJson = await claimRes.json();
+        console.log('Claim response (after deploy):', claimJson);
       }
 
-      setMintStatus('minting');
-      try {
-        const mintRes = await fetch('/api/mint', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            walletAddress: walletAddress.trim(),
-            metadataUri,
-            userName,
-            animalType: quizResult,
-          }),
-        });
-        const mintJson = await mintRes.json();
-        console.log('Mint response:', mintJson);
-        if (mintRes.ok && mintJson?.success) {
-          setMintStatus('success');
-        } else {
-          throw new Error(mintJson?.message || 'Mint failed (backend not ready)');
+      if (claimRes.ok && claimJson?.success) {
+        setMintStatus('success');
+        if (claimJson?.usedContractAddress) {
+          // @ts-ignore local state created earlier optional
+          setContractAddress(claimJson.usedContractAddress as string);
         }
-      } catch (e) {
-        setMintStatus('error');
-        setErrorMessage(e instanceof Error ? e.message : 'Mint failed');
+      } else {
+        throw new Error(claimJson?.message || 'Mint failed');
       }
-    } finally {
-      setIsMinting(false);
+    } catch (e) {
+      setMintStatus('error');
+      setErrorMessage(e instanceof Error ? e.message : 'Mint failed');
     }
   };
 
@@ -287,6 +309,14 @@ export default function Result() {
       </div>
     </div>;
   }
+
+  const closeModal = () => {
+    setIsMintOpen(false);
+    setMintStatus('idle');
+    setWalletAddress('');
+    setErrorMessage('');
+    setContractAddress(null);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-100 via-purple-50 to-blue-100 p-4">
@@ -366,25 +396,56 @@ export default function Result() {
                 <div className="mb-3 p-3 bg-red-100 text-red-700 rounded-lg border border-red-300">{errorMessage}</div>
               )}
               {mintStatus === 'success' && (
-                <div className="mb-3 p-3 bg-green-100 text-green-700 rounded-lg border border-green-300">Mint request completed.</div>
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+                  <p className="text-green-800 text-center mb-4">
+                    Mint request completed!
+                  </p>
+                  {contractAddress && (
+                    <div className="text-center">
+                      <a
+                        href={`https://biru.gg/collections/soneium:${contractAddress}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block bg-black text-white px-6 py-2 rounded-lg hover:bg-gray-800 transition-colors"
+                      >
+                        View on Biru
+                      </a>
+                    </div>
+                  )}
+                </div>
               )}
-              <div className="flex gap-3">
+
+              <div className="flex justify-end space-x-3">
                 <button
-                  onClick={() => setIsMintOpen(false)}
-                  disabled={isMinting}
-                  className="flex-1 bg-gray-200 text-gray-700 py-3 px-6 rounded-xl font-semibold hover:bg-gray-300 transition-colors disabled:opacity-50"
+                  onClick={closeModal}
+                  className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
                 >
-                  Cancel
+                  {mintStatus === 'success' ? 'Close' : 'Cancel'}
                 </button>
-                <button
-                  onClick={handleMint}
-                  disabled={isMinting || !walletAddress.trim()}
-                  className="flex-1 bg-gradient-to-r from-pink-500 to-purple-600 text-white py-3 px-6 rounded-xl font-semibold hover:from-pink-600 hover:to-purple-700 transition-colors disabled:opacity-50"
-                >
-                  {isMinting ? (mintStatus === 'uploading' ? 'Uploading...' : 'Minting...') : 'Mint'}
-                </button>
+                {mintStatus !== 'success' && (
+                  <button
+                    onClick={handleMint}
+                    disabled={isMinting}
+                    className="px-6 py-2 bg-gradient-to-r from-pink-500 to-purple-600 text-white rounded-lg hover:from-pink-600 hover:to-purple-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isMinting ? 'Minting...' : 'Mint'}
+                  </button>
+                )}
               </div>
             </div>
+          </div>
+        )}
+        {/* View on Biru button below page content (shown after success) */}
+        {mintStatus === 'success' && contractAddress && (
+          <div className="text-center mt-6">
+            <a
+              href={`https://biru.gg/collections/soneium:${contractAddress}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-block bg-black text-white px-6 py-3 rounded-xl font-semibold text-lg hover:bg-gray-800 transition-colors"
+            >
+              View on Biru
+            </a>
           </div>
         )}
       </div>
