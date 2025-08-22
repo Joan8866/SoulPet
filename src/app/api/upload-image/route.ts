@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Upload to Cloudinary
-    const result = await new Promise((resolve, reject) => {
+    const result = await new Promise<{ secure_url: string; public_id: string }>((resolve, reject) => {
       cloudinary.uploader.upload(
         imageBase64,
         {
@@ -30,15 +30,16 @@ export async function POST(request: NextRequest) {
         },
         (error, result) => {
           if (error) reject(error);
-          else resolve(result);
+          else if (result) resolve(result as { secure_url: string; public_id: string });
+          else reject(new Error('Upload failed'));
         }
       );
     });
 
     return NextResponse.json({
       success: true,
-      imageUrl: (result as any).secure_url,
-      publicId: (result as any).public_id,
+      imageUrl: result.secure_url,
+      publicId: result.public_id,
     });
   } catch (error) {
     console.error('Image upload error:', error);

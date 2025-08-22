@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import NextImage from 'next/image';
 
 export default function Result() {
   const [userName, setUserName] = useState('');
@@ -118,51 +117,6 @@ export default function Result() {
     }
   };
 
-  const handleShare = async () => {
-    try {
-      if (!generatedUrl) await generateImage();
-
-      const navAny = navigator as any;
-      const supportsFileShare = !!(navAny?.canShare) && (() => {
-        try {
-          // Quick capability probe for file sharing
-          return navAny.canShare({ files: [new File([new Blob()], 'probe.png', { type: 'image/png' })] });
-        } catch {
-          return false;
-        }
-      })();
-
-      if (supportsFileShare) {
-        const resp = await fetch(generatedUrl);
-        const blob = await resp.blob();
-        const fileName = `Soulpet-${userName}-${quizResult}.png`;
-        const file = new File([blob], fileName, { type: 'image/png' });
-        await navAny.share({
-          files: [file],
-          title: `${userName}'s Soulpet`,
-          text: `My Soulpet is ${quizResult}!`,
-        });
-        return;
-      }
-
-      // Fallback: URL/text share (no auto-download). Some browsers require https URL, so share the page URL.
-      if (navigator.share) {
-        await navigator.share({
-          title: `${userName}'s Soulpet`,
-          text: `My Soulpet is ${quizResult}!`,
-          url: typeof window !== 'undefined' ? window.location.href : undefined,
-        });
-        return;
-      }
-
-      // Last resort: show a friendly hint instead of forcing a download
-      alert('Sharing is not supported on this browser. Please use “Save PNG” to download and share manually.');
-    } catch (e) {
-      console.error('Share failed', e);
-      alert('Sharing failed. Please try “Save PNG” to download and share manually.');
-    }
-  };
-
   const handleMint = async () => {
     if (!walletAddress.trim()) {
       setErrorMessage('Please enter a wallet address');
@@ -190,7 +144,13 @@ export default function Result() {
       console.log('Image uploaded:', imageUrl);
 
       // 2. 用圖片 URL 來 mint NFT
-      const claimBody: any = {
+      const claimBody: {
+        recipientAddress: string;
+        userName: string;
+        animalType: string;
+        imageUrl: string;
+        contractAddress?: string;
+      } = {
         recipientAddress: walletAddress.trim(),
         userName,
         animalType: quizResult,
@@ -210,7 +170,16 @@ export default function Result() {
       if (!(claimRes.ok) && String(claimJson?.message || '').includes('Missing contractAddress')) {
         // 自動部署合約後再嘗試一次
         const deployRes = await fetch('/api/drops/deploy', { method: 'POST' });
-        const deployJson = await deployRes.json();
+        const deployJson = await deployRes.json() as {
+          success: boolean;
+          usedContractAddress?: string;
+          data?: {
+            contractAddress?: string;
+            contract?: { address?: string };
+            address?: string;
+          };
+          message?: string;
+        };
         console.log('Auto deploy response:', deployJson);
         if (!deployRes.ok || !deployJson?.data) {
           throw new Error(deployJson?.message || 'Auto deploy failed');
@@ -236,13 +205,12 @@ export default function Result() {
         console.log('Claim response (after deploy):', claimJson);
       }
 
-      if (claimRes.ok && claimJson?.success) {
-        setMintStatus('success');
-        if (claimJson?.usedContractAddress) {
-          // @ts-ignore local state created earlier optional
-          setContractAddress(claimJson.usedContractAddress as string);
-        }
-      } else {
+               if (claimRes.ok && claimJson?.success) {
+           setMintStatus('success');
+           if (claimJson?.usedContractAddress) {
+             setContractAddress(claimJson.usedContractAddress as string);
+           }
+         } else {
         throw new Error(claimJson?.message || 'Mint failed');
       }
     } catch (e) {
@@ -253,12 +221,13 @@ export default function Result() {
 
   const handleDownload = () => {
     if (!generatedUrl) return;
-    const a = document.createElement('a');
-    a.href = generatedUrl;
-    a.download = `Soulpet-${userName}-${quizResult}.png`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    
+    const link = document.createElement('a');
+    link.href = generatedUrl;
+    link.download = `Soulpet-${userName}-${quizResult}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -327,7 +296,7 @@ export default function Result() {
             <h1 className="text-3xl font-bold bg-gradient-to-r from-pink-500 to-purple-600 bg-clip-text text-transparent mb-2">
               Your Result
             </h1>
-            <p className="text-gray-600">Congratulations {userName}! You've discovered your spirit animal.</p>
+            <p className="text-gray-600">Congratulations {userName}! You&apos;ve discovered your spirit animal.</p>
           </div>
 
           {/* 產出結果圖：預覽 */}

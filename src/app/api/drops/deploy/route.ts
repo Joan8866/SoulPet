@@ -39,8 +39,7 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
-      // @ts-expect-error next
-      cache: 'no-store',
+      cache: 'no-store' as RequestCache,
     });
 
     const data = await res.json().catch(() => ({}));

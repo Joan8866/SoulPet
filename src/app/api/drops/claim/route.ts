@@ -54,17 +54,6 @@ export async function POST(request: NextRequest) {
       imageUrl = `${baseUrl}/assets/animals/${animalFile}`;
     }
     
-    // Helper function for rounded rectangle
-    function roundedRect(ctx: any, x: number, y: number, w: number, h: number, r: number) {
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + w, y, x + w, y + h, r);
-      ctx.arcTo(x + w, y + h, x, y + h, r);
-      ctx.arcTo(x, y + h, x, y, r);
-      ctx.arcTo(x, y, x + w, y, r);
-      ctx.closePath();
-    }
-
     const payload = {
       chainId: 1868,
       quantity: 1,
@@ -92,8 +81,7 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
-      // @ts-expect-error next
-      cache: 'no-store',
+      cache: 'no-store' as RequestCache,
     });
 
     const data = await res.json().catch(() => ({}));

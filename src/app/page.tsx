@@ -37,7 +37,7 @@ export default function Home() {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label htmlFor="userName" className="block text-sm font-medium text-gray-700 mb-2">
-              What's your name?
+              What&apos;s your name?
             </label>
             <input
               type="text"
